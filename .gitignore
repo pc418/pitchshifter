@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+retune.app/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+.DS_Store
+*.o
+*.d
+*.dSYM/
+driver/
+CLAUDE.md
