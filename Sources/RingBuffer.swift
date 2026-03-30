@@ -64,24 +64,22 @@ final class RingBuffer {
     }
 
     /// Write interleaved stereo from a single buffer (L0 R0 L1 R1 ...).
-    /// Deinterleaves into dual-channel storage. Zero heap allocation.
+    /// Deinterleaves into dual-channel storage using vDSP stride copy. Zero heap allocation.
     func writeInterleaved(_ src: UnsafePointer<Float>, frames: Int) {
         os_unfair_lock_lock(&lock)
         let pos = writePos & mask
         let first = min(frames, capacity - pos)
 
-        for i in 0..<first {
-            bufferL[pos &+ i] = src[i &* 2]
-            bufferR[pos &+ i] = src[i &* 2 &+ 1]
-        }
+        var zero: Float = 0
+        // Copy every 2nd sample (stride 2 → 1) for L and R channels
+        vDSP_vsadd(src,                    2, &zero, bufferL.advanced(by: pos), 1, vDSP_Length(first))
+        vDSP_vsadd(src.advanced(by: 1),    2, &zero, bufferR.advanced(by: pos), 1, vDSP_Length(first))
 
         let second = frames - first
         if second > 0 {
-            for i in 0..<second {
-                let si = (first &+ i) &* 2
-                bufferL[i] = src[si]
-                bufferR[i] = src[si &+ 1]
-            }
+            let offset = first * 2
+            vDSP_vsadd(src.advanced(by: offset),     2, &zero, bufferL, 1, vDSP_Length(second))
+            vDSP_vsadd(src.advanced(by: offset + 1), 2, &zero, bufferR, 1, vDSP_Length(second))
         }
 
         writePos &+= frames

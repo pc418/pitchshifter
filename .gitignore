@@ -1,6 +1,6 @@
 .build/
 .swiftpm/
-retune.app/
+pitchshift.app/
 *.xcodeproj/
 xcuserdata/
 DerivedData/
@@ -9,4 +9,3 @@ DerivedData/
 *.d
 *.dSYM/
 driver/
-CLAUDE.md

@@ -1,132 +1,73 @@
-# Retune
+# PitchShift
 
-System-wide pitch shifter for macOS. Lives in the menu bar, intercepts all audio output, and retunes it in real time.
+<p align="center">
+  <img src="assets/Gemini_Generated_Image_bg2bt1bg2bt1bg2b.png" width="128" alt="PitchShift icon">
+</p>
 
-![Retune interface](assets/screenshot.png)
+A macOS menu bar app that pitch-shifts all system audio in real time.
 
-The main use case: listen to any music, podcast, or video in A=432 Hz (or C=256 Hz, or whatever reference you prefer) without modifying the source files.
+Modern concert pitch (A4 = 440 Hz) was standardized in 1955 by the ISO. But for most of Western music history, pitch was lower — Baroque ensembles tuned to A = 415 Hz, and even into the Classical era, A hovered around 420–430 Hz. The push toward 440 and above is a relatively recent phenomenon, driven largely by orchestral "brightness wars": higher tuning makes instruments sound more brilliant and exciting in a concert hall, which audiences respond to, which pushes ensembles to tune even higher. Many European orchestras now tune to A = 443 Hz or above.
 
-## Why
-
-Every recording you stream is tuned to A=440 Hz. If you want to hear it at A=432, you have two options: pitch-shift every file manually, or shift the entire audio output in real time. Retune does the latter. One toggle, all audio, no file conversion.
-
-Works with Spotify, Apple Music, YouTube, VLC — anything that makes sound on your Mac.
+The result is that virtually all recorded and streamed music today is tuned to 440 Hz or higher — a standard chosen for projection and excitement, not necessarily for comfort or consonance. Some listeners find that lower tuning standards (432 Hz, 256 Hz for C4) produce a warmer, more relaxed quality. Whether you prefer Verdi's A = 432, scientific C = 256, or historical Baroque pitch, PitchShift lets you retune everything playing on your Mac to hear it the way you want.
 
 ## Requirements
 
-- **macOS 14.2** (Sonoma) or later — uses the Core Audio Tap API introduced in macOS 14.2
-- Apple Silicon or Intel Mac
-- No additional drivers or kernel extensions needed
+- macOS 14.2+ (uses Core Audio Tap API)
+- Xcode Command Line Tools
 
-Tested on macOS 14 (Sonoma), 15 (Sequoia), and 26 (Tahoe).
-
-## Install
-
-### Option A: Build from source
+## Build
 
 ```bash
-git clone https://github.com/StrongDeparture/retune.git
-cd retune
-bash build.sh
-open retune.app
+git clone https://github.com/pc418/pitchshifter.git
+cd pitchshifter
+make build     # release build, package .app, ad-hoc codesign
+make run       # build + open
+make install   # copy to /Applications
+make clean     # remove build artifacts
 ```
-
-Requires Xcode Command Line Tools (`xcode-select --install`).
-
-### Option B: Download the release
-
-Download `retune.app.zip` from [Releases](https://github.com/StrongDeparture/retune/releases), unzip, and move to `/Applications`.
-
-### First launch (unsigned app)
-
-Since the app is not notarized by Apple, macOS will block it on first launch:
-
-1. **Right-click** (or Control-click) `retune.app` and select **Open**
-2. Click **Open** in the dialog that appears
-3. Alternatively: go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the Retune message
-
-You only need to do this once. After that, it opens normally.
-
-### Grant permission
-
-On first run, macOS will ask to allow Retune to capture system audio. Click **Allow**. This uses the Core Audio Tap API — no microphone access, no orange dot.
 
 ## Usage
 
-Retune appears as a **♪ icon in the menu bar**. Click it to open the panel.
+PitchShift lives in the menu bar. The icon shows **♮** when active and **#** when disabled.
 
-**Toggle on/off** — the switch at the top starts or stops pitch shifting.
+Open the panel to toggle pitch shifting and set your preferred tuning:
 
-**Reference note** — pick C or A as your reference:
-- **C mode**: set C4 directly (default 256 Hz). Presets: 256, 261.
-- **A mode**: set A4 directly (default 432 Hz). Presets: 432, 440.
+**Reference modes:**
+- **A mode** — Set A4 directly (range: 415–460 Hz, default 432 Hz)
+- **C mode** — Set C4 directly (range: 240–270 Hz, default 256 Hz)
 
-The slider lets you dial in any frequency within range. The cents offset from 440 is shown on the right.
+**Built-in presets:**
+- A4 = 415 Hz — Baroque pitch
+- A4 = 432 Hz — Verdi tuning
+- A4 = 440 Hz — ISO standard (no shift)
+- A4 = 443 Hz — European orchestral pitch
+- C4 = 256 Hz — Scientific / Schiller pitch (A4 ≈ 430.5 Hz)
 
-Retune always outputs to whatever your system default audio device is. Plug in headphones, switch Bluetooth — it follows automatically.
+Your chosen frequency persists across restarts. When disabled, the display resets to A = 440 Hz; your preference is remembered and restored when you re-enable.
 
-**Settings persist** across app restarts (reference note, frequency).
+The app automatically follows your system default audio output device — plug in headphones, connect Bluetooth, switch outputs, and PitchShift adapts without interruption.
 
 ## How it works
 
-1. Creates a system-wide audio tap via `CATapDescription` (Core Audio Tap API, macOS 14.2+)
-2. Reads captured audio through an IOProc on an aggregate device
-3. Pipes it through `AVAudioUnitTimePitch` for pitch shifting
-4. Outputs to the system default audio device
-
-No virtual audio driver needed. No kernel extension. No microphone permission. The original audio is muted by the tap and replaced with the pitch-shifted version.
-
-## Use cases
-
-**Listener who prefers A=432** — Turn it on, leave it on. All your music, videos, and podcasts play in 432.
-
-**Musician practicing along with recordings** — Set your guitar to 432 (or any reference), then retune the backing track to match. No need to re-download or convert files.
-
-**Exploring alternative tunings** — Dial the slider to hear what C=256 (scientific pitch), A=444 (Verdi), or any other reference sounds like with your existing music library.
-
-## FAQ
-
-**Does it add latency?**
-About 3ms at 96 kHz. Negligible for listening. Not designed for live performance monitoring.
-
-**Does it affect recording apps?**
-The tap excludes Retune's own process. Other apps that record system audio will capture the original (unmuted) stream or the shifted stream depending on their capture method.
-
-**Can I use it with AirPods / Bluetooth headphones?**
-Yes. Retune automatically follows the system default output device, so just connect your Bluetooth headphones and it switches.
-
-**What about sample rate?**
-Retune matches the output device's native sample rate automatically (44.1, 48, 96 kHz, etc.). No manual configuration needed.
-
-**Does it work at login?**
-Not yet — there's no "start at login" option. You need to open the app manually after each reboot. The frequency and reference settings are remembered.
-
-**Why is there no orange dot?**
-The Core Audio Tap API captures system audio output, not microphone input. macOS only shows the orange dot for microphone access.
-
-## Building
-
-```bash
-# Build release binary and package into .app bundle
-bash build.sh
+```
+Core Audio Tap → IOProc → RingBuffer → AVAudioSourceNode → AVAudioUnitTimePitch → Output
 ```
 
-The build script:
-1. Runs `swift build -c release`
-2. Copies the binary into `retune.app/Contents/MacOS/`
-3. Copies `Info.plist` into the bundle
-4. Ad-hoc codesigns the binary with entitlements
+1. **System audio capture** — `CATapDescription` creates a stereo global tap that captures all system audio except the app's own output, avoiding feedback loops.
+2. **Aggregate device** — An aggregate device pairs the tap with the physical output, providing a single IOProc-based capture path.
+3. **Ring buffer** — A lock-free dual-channel ring buffer (non-interleaved, power-of-2 capacity, Accelerate-backed) bridges the IOProc real-time thread to the AVAudioEngine pull model.
+4. **Pitch shifting** — `AVAudioUnitTimePitch` applies the frequency shift at maximum render quality (overlap = 32, quality = 127), preserving tempo while changing pitch.
+5. **Output** — The processed audio routes to your selected physical device.
 
-## Support
+No virtual audio drivers, kernel extensions, or microphone access required. The tap reads system audio output directly via the Core Audio Tap API introduced in macOS 14.2.
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/K3K81WK1N8)
+## Advanced
 
-Crypto:
-
-- **ETH / USDT (Ethereum):** `0xe2e83b95f9085bedc61c28abd77a4c71997dd146`
-- **BTC:** `bc1p8s5dhyg3e5nl4a3qfydakwn6cv4w55a9km3xzd8s9rumjqrxf9jqdmhzv6`
-- **SOL:** `7kVAEjUdm1RusZ2b8Ag6HdUSGyurb9Yyu8MW1bVtGi9`
+The panel includes an Advanced section for buffer size control:
+- **Auto mode** selects a buffer that gives ≥ 20 ms latency at the current sample rate
+- **Manual mode** lets you pick from 16 to 16384 frames — lower = less latency, higher = better quality
+- Per-sample-rate buffer sizes are remembered independently
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE) — free to use and share for noncommercial purposes. You may not sell or charge for this software or any derivative.
+[Apache License 2.0](LICENSE)

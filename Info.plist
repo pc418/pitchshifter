@@ -3,19 +3,27 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.retune.app</string>
+    <string>com.pitchshift.app</string>
     <key>CFBundleName</key>
-    <string>Retune</string>
+    <string>PitchShift</string>
     <key>CFBundleDisplayName</key>
-    <string>Retune</string>
+    <string>PitchShift</string>
     <key>CFBundleExecutable</key>
-    <string>retune</string>
+    <string>pitchshift</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleVersion</key>
-    <string>1.2.0</string>
+    <string>1.3.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.0</string>
+    <string>1.3.0</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.2</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2025 PitchShift. All rights reserved.</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSSupportsAutomaticTermination</key>
@@ -25,6 +33,6 @@
     <key>LSGetAppDiedEvents</key>
     <true/>
     <key>NSAudioCaptureUsageDescription</key>
-    <string>retune captures system audio to apply pitch correction (no microphone access needed).</string>
+    <string>PitchShift captures system audio to apply real-time pitch shifting. No microphone access is needed.</string>
 </dict>
 </plist>

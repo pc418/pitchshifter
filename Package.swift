@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "retune",
+    name: "pitchshift",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "retune",
+            name: "pitchshift",
             path: "Sources",
             linkerSettings: [
                 .linkedFramework("CoreAudio"),

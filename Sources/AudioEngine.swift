@@ -17,8 +17,10 @@ final class AudioEngine: ObservableObject {
     private static let udNoteKey = "referenceNote"
     private static let udFreqKey = "referenceFreq"
     private static let udBufferKey = "bufferSize"
+    private static let udAutoBufferKey = "autoBuffer"
+    private static let udBufferPerRateKey = "bufferSizePerRate"
 
-    static let bufferSizes: [UInt32] = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+    static let bufferSizes: [UInt32] = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 
     @Published var isRunning = false
     @Published var referenceNote: ReferenceNote = .A {
@@ -31,32 +33,104 @@ final class AudioEngine: ObservableObject {
             UserDefaults.standard.set(referenceNote.rawValue, forKey: Self.udNoteKey)
         }
     }
+
+    // Store user's actual choice
+    private var storedReferenceFreq: Float = 432
+
     @Published var referenceFreq: Float = 432 {
         didSet {
+            // Only store if running (user's actual choice)
+            if isRunning || isRestarting {
+                storedReferenceFreq = referenceFreq
+                UserDefaults.standard.set(referenceFreq, forKey: Self.udFreqKey)
+            }
             updateFromReference()
-            UserDefaults.standard.set(referenceFreq, forKey: Self.udFreqKey)
         }
     }
     @Published private(set) var targetA: Float = 432
     private var outputDeviceID: AudioDeviceID = 0 {
         didSet {
             guard oldValue != outputDeviceID, oldValue != 0 else { return }
-            if isRunning { restart() }
+            if isRunning || isRestarting { restart() }
         }
     }
+    private var suppressBufferRestart = false
     @Published var bufferSize: UInt32 = 512 {
         didSet {
             UserDefaults.standard.set(Int(bufferSize), forKey: Self.udBufferKey)
-            if isRunning { restart() }
+            if !suppressBufferRestart && (isRunning || isRestarting) { restart() }
         }
     }
+    @Published var isAutoBuffer: Bool = true {
+        didSet {
+            UserDefaults.standard.set(isAutoBuffer, forKey: Self.udAutoBufferKey)
+        }
+    }
+    /// Per-sample-rate manual buffer sizes: [sampleRateInt: bufferFrames]
+    private var bufferSizePerRate: [Int: UInt32] = [:]
     @Published var currentSampleRate: Float64?
     @Published private(set) var isLowPowerMode: Bool = false
 
-    var bufferLatencyMs: String {
+    var bufferLatencyMs: Double {
         let sr = currentSampleRate ?? 48000
-        let ms = Double(bufferSize) / sr * 1000.0
-        return String(format: "%.1f ms", ms)
+        return Double(bufferSize) / sr * 1000.0
+    }
+
+    var bufferLatencyLabel: String {
+        String(format: "%.1f ms", bufferLatencyMs)
+    }
+
+    /// Smallest power-of-2 buffer that gives >= 20ms latency at the given rate.
+    static func autoBufferSize(forRate sampleRate: Float64) -> UInt32 {
+        let minFrames = sampleRate * 20.0 / 1000.0
+        var buf: UInt32 = 16
+        while Double(buf) < minFrames { buf <<= 1 }
+        return min(buf, 16384)
+    }
+
+    /// Called by UI when user manually drags the buffer slider.
+    func setManualBuffer(_ size: UInt32) {
+        isAutoBuffer = false
+        bufferSize = size
+        if let rate = currentSampleRate {
+            let rateKey = Int(rate)
+            bufferSizePerRate[rateKey] = size
+            persistBufferPerRate()
+        }
+    }
+
+    /// Re-enable auto buffer and immediately apply.
+    func enableAutoBuffer() {
+        isAutoBuffer = true
+        let rate = currentSampleRate ?? 48000
+        let auto = Self.autoBufferSize(forRate: rate)
+        bufferSize = auto
+    }
+
+    /// Apply the correct buffer size for a given sample rate (called during start).
+    private func applyBufferForRate(_ sampleRate: Float64) {
+        let rateKey = Int(sampleRate)
+        let newSize: UInt32
+        if isAutoBuffer {
+            newSize = Self.autoBufferSize(forRate: sampleRate)
+        } else if let stored = bufferSizePerRate[rateKey] {
+            newSize = stored
+        } else {
+            // No stored value for this rate → switch to auto
+            isAutoBuffer = true
+            newSize = Self.autoBufferSize(forRate: sampleRate)
+        }
+        suppressBufferRestart = true
+        bufferSize = newSize
+        suppressBufferRestart = false
+    }
+
+    private func persistBufferPerRate() {
+        var dict: [String: Int] = [:]
+        for (key, val) in bufferSizePerRate {
+            dict[String(key)] = Int(val)
+        }
+        UserDefaults.standard.set(dict, forKey: Self.udBufferPerRateKey)
     }
 
     var centsValue: Float {
@@ -90,9 +164,17 @@ final class AudioEngine: ObservableObject {
     var referencePresets: [(String, Float)] {
         switch referenceNote {
         case .C: return [("256", 256), ("261", 261)]
-        case .A: return [("432", 432), ("440", 440)]
+        case .A: return [("415", 415), ("432", 432), ("440", 440), ("443", 443)]
         }
     }
+
+    /// Named tuning standards for display.
+    static let tuningReferences: [(name: String, a4: Float, note: String)] = [
+        ("Baroque", 415, "A4 = 415 Hz"),
+        ("Verdi", 432, "A4 = 432 Hz"),
+        ("European", 443, "A4 = 443 Hz"),
+        ("Scientific", 430.54, "C4 = 256 Hz"),
+    ]
 
     // MARK: - Private State
 
@@ -105,9 +187,9 @@ final class AudioEngine: ObservableObject {
     fileprivate nonisolated(unsafe) var ioProcID: AudioDeviceIOProcID?
     fileprivate nonisolated(unsafe) var ringBuffer = RingBuffer(capacity: 131072)
     private var statsTimer: DispatchSourceTimer?
-    private let logger = RetuneLogger.shared
+    private let logger = PitchShiftLogger.shared
     private var startRetryCount: Int = 0
-    private let maxStartRetries: Int = 3
+    private let maxStartRetries: Int = 5
 
     fileprivate nonisolated(unsafe) var ioProcCallCount: Int = 0
     fileprivate nonisolated(unsafe) var ioProcNonZeroCount: Int = 0
@@ -117,21 +199,28 @@ final class AudioEngine: ObservableObject {
     // Device change & wake handling
     private var deviceListenerBlock: AudioObjectPropertyListenerBlock?
     private var devicesListenerBlock: AudioObjectPropertyListenerBlock?
+    private var sampleRateListenerBlock: AudioObjectPropertyListenerBlock?
+    private var monitoredDeviceForRate: AudioDeviceID = 0
     private var wakeObserver: Any?
     private var powerObserver: Any?
     private var isHandlingDeviceChange = false
     private var lastKnownDefaultOutput: AudioDeviceID = 0
+    private var restartWorkItem: DispatchWorkItem?
+    @Published private(set) var isRestarting = false
 
     // MARK: - Init
 
     init() {
         loadPersistedSettings()
+        // Start with A=440 displayed (disabled state)
+        referenceNote = .A
+        referenceFreq = 440
         refreshOutputDevice()
         lastKnownDefaultOutput = AudioDeviceManager.defaultOutputDeviceID()
         installDeviceListeners()
         registerForWakeNotification()
         setupPowerMonitoring()
-        logger.log("[Retune] Log file: \(logger.logPath)")
+        logger.log("[PitchShift] Log file: \(logger.logPath)")
     }
 
     private func loadPersistedSettings() {
@@ -143,7 +232,20 @@ final class AudioEngine: ObservableObject {
         }
         let freq = ud.float(forKey: Self.udFreqKey)
         if freq > 0 {
+            storedReferenceFreq = freq
             referenceFreq = freq
+        }
+        // Load auto buffer preference (default true)
+        if ud.object(forKey: Self.udAutoBufferKey) != nil {
+            isAutoBuffer = ud.bool(forKey: Self.udAutoBufferKey)
+        }
+        // Load per-rate buffer sizes
+        if let dict = ud.dictionary(forKey: Self.udBufferPerRateKey) as? [String: Int] {
+            for (key, val) in dict {
+                if let rateKey = Int(key) {
+                    bufferSizePerRate[rateKey] = UInt32(val)
+                }
+            }
         }
         let buf = ud.integer(forKey: Self.udBufferKey)
         if buf > 0, Self.bufferSizes.contains(UInt32(buf)) {
@@ -168,7 +270,7 @@ final class AudioEngine: ObservableObject {
 
     private func isVirtualDevice(_ deviceID: AudioDeviceID) -> Bool {
         guard let name = AudioDeviceManager.deviceName(for: deviceID)?.lowercased() else { return false }
-        return name.contains("blackhole") || name.contains("multi") || name.contains("多重") || name.contains("retune")
+        return name.contains("blackhole") || name.contains("multi") || name.contains("多重") || name.contains("pitchshift")
     }
 
     private func updatePitch() {
@@ -250,12 +352,53 @@ final class AudioEngine: ObservableObject {
         lastKnownDefaultOutput = newDefault
 
         if !isVirtualDevice(newDefault) && newDefault != outputDeviceID {
-            logger.log("[Retune] Following default output → \(AudioDeviceManager.deviceName(for: newDefault) ?? "?") (\(newDefault))")
+            logger.log("[PitchShift] Following default output → \(AudioDeviceManager.deviceName(for: newDefault) ?? "?") (\(newDefault))")
             outputDeviceID = newDefault  // triggers restart via didSet
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.isHandlingDeviceChange = false
+        }
+    }
+
+    // MARK: - Sample Rate Change Listener
+
+    private func installSampleRateListener(for deviceID: AudioDeviceID) {
+        removeSampleRateListener()
+        monitoredDeviceForRate = deviceID
+
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.handleSampleRateChange()
+            }
+        }
+        sampleRateListenerBlock = block
+        AudioObjectAddPropertyListenerBlock(deviceID, &addr, DispatchQueue.main, block)
+    }
+
+    private func removeSampleRateListener() {
+        if let block = sampleRateListenerBlock, monitoredDeviceForRate != 0 {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyNominalSampleRate,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(monitoredDeviceForRate, &addr, DispatchQueue.main, block)
+            sampleRateListenerBlock = nil
+            monitoredDeviceForRate = 0
+        }
+    }
+
+    private func handleSampleRateChange() {
+        guard isRunning || isRestarting else { return }
+        if let newRate = AudioDeviceManager.deviceSampleRate(for: outputDeviceID) {
+            logger.log("[PitchShift] Output sample rate changed → \(Int(newRate)) Hz")
+            restart()
         }
     }
 
@@ -274,9 +417,9 @@ final class AudioEngine: ObservableObject {
     }
 
     private func handleWake() {
-        logger.log("[Retune] System wake detected")
+        logger.log("[PitchShift] System wake detected")
         guard isRunning else { return }
-        logger.log("[Retune] Restarting after wake")
+        logger.log("[PitchShift] Restarting after wake")
         refreshOutputDevice()
         restart()
     }
@@ -285,7 +428,7 @@ final class AudioEngine: ObservableObject {
 
     private func setupPowerMonitoring() {
         isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-        logger.log("[Retune] Power state: \(isLowPowerMode ? "low power" : "normal"), overlap=\(qualityOverlap)")
+        logger.log("[PitchShift] Power state: \(isLowPowerMode ? "low power" : "normal"), overlap=\(qualityOverlap)")
 
         powerObserver = NotificationCenter.default.addObserver(
             forName: Notification.Name("NSProcessInfoPowerStateDidChangeNotification"),
@@ -297,7 +440,7 @@ final class AudioEngine: ObservableObject {
                 let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
                 guard lowPower != self.isLowPowerMode else { return }
                 self.isLowPowerMode = lowPower
-                self.logger.log("[Retune] Power mode changed: \(lowPower ? "low power" : "normal")")
+                self.logger.log("[PitchShift] Power mode changed: \(lowPower ? "low power" : "normal")")
             }
         }
     }
@@ -307,43 +450,75 @@ final class AudioEngine: ObservableObject {
     func start() {
         if isRunning { return }
         startRetryCount = 0
+        // Restore user's stored frequency
+        referenceFreq = storedReferenceFreq
         attemptStart()
     }
 
     private func attemptStart() {
         do {
             try createTap()
+
+            // Determine sample rate before creating aggregate so buffer can be sized correctly
+            let sampleRate: Float64
+            if let sr = AudioDeviceManager.deviceSampleRate(for: outputDeviceID), sr > 0 {
+                sampleRate = sr
+            } else {
+                sampleRate = 48000
+            }
+            applyBufferForRate(sampleRate)
+
             try createAggregateDevice()
             try setupAVEngine()
             try avEngine?.start()
             try startCapture()
+            installSampleRateListener(for: outputDeviceID)
             isRunning = true
-            logger.log("[Retune] Started. Pitch: \(String(format: "%.1f", centsValue)) cents, output: \(AudioDeviceManager.deviceName(for: outputDeviceID) ?? "?")")
+            logger.log("[PitchShift] Started. Pitch: \(String(format: "%.1f", centsValue)) cents, buffer=\(bufferSize), output: \(AudioDeviceManager.deviceName(for: outputDeviceID) ?? "?")")
             startStatsTimer()
         } catch {
-            logger.log("[Retune] ERROR: \(error)")
+            logger.log("[PitchShift] ERROR: \(error)")
             tearDown()
             if startRetryCount < maxStartRetries {
                 startRetryCount += 1
                 let delay = 0.5 * Double(startRetryCount)
-                logger.log("[Retune] Retrying (\(startRetryCount)/\(maxStartRetries)) in \(String(format: "%.1f", delay))s")
+                logger.log("[PitchShift] Retrying (\(startRetryCount)/\(maxStartRetries)) in \(String(format: "%.1f", delay))s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     self?.attemptStart()
                 }
+            } else {
+                logger.log("[PitchShift] Failed to start after \(maxStartRetries) retries")
+                isRunning = false
+                isRestarting = false
             }
         }
     }
 
     func stop() {
-        logger.log("[Retune] Stopping...")
+        restartWorkItem?.cancel()
+        restartWorkItem = nil
+        isRestarting = false
+        logger.log("[PitchShift] Stopping...")
         tearDown()
         isRunning = false
-        logger.log("[Retune] Stopped")
+        // Reset to A=440 when stopped
+        referenceNote = .A
+        referenceFreq = 440
+        logger.log("[PitchShift] Stopped")
+    }
+
+    func toggle() {
+        if isRunning || isRestarting {
+            stop()
+        } else {
+            start()
+        }
     }
 
     private func tearDown() {
         statsTimer?.cancel()
         statsTimer = nil
+        removeSampleRateListener()
         stopCapture()
         avEngine?.stop()
         avEngine = nil
@@ -359,14 +534,33 @@ final class AudioEngine: ObservableObject {
         currentSampleRate = nil
     }
 
+    /// Coalesced restart: tears down immediately, then re-starts after a short
+    /// delay so Core Audio can fully release the old aggregate device and tap.
+    /// Multiple calls within the delay window are coalesced into one restart.
+    /// isRunning stays true so the UI toggle doesn't flicker.
     private func restart() {
-        let wasRunning = isRunning
+        let shouldRestart = isRunning || isRestarting
+
+        // Cancel any previously scheduled restart
+        restartWorkItem?.cancel()
+        restartWorkItem = nil
+
         tearDown()
-        isRunning = false
-        if wasRunning {
-            startRetryCount = 0
-            attemptStart()
+        // Do NOT set isRunning = false — the user didn't stop it
+
+        guard shouldRestart else { return }
+
+        isRestarting = true
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.isRestarting = false
+            self.restartWorkItem = nil
+            self.startRetryCount = 0
+            self.attemptStart()
         }
+        restartWorkItem = work
+        // 0.4s gives Core Audio enough time to release the old resources
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     // MARK: - Own Process Object ID (to exclude from tap)
@@ -391,7 +585,7 @@ final class AudioEngine: ObservableObject {
             &processObjectID
         )
         guard status == noErr, processObjectID != AudioObjectID(kAudioObjectUnknown) else {
-            throw NSError(domain: "Retune", code: Int(status),
+            throw NSError(domain: "PitchShift", code: Int(status),
                          userInfo: [NSLocalizedDescriptionKey: "Failed to get process object ID: \(status)"])
         }
         return processObjectID
@@ -410,13 +604,13 @@ final class AudioEngine: ObservableObject {
             var tid = AudioObjectID(kAudioObjectUnknown)
             let status = AudioHardwareCreateProcessTap(desc, &tid)
             guard status == noErr else {
-                throw NSError(domain: "Retune", code: Int(status),
+                throw NSError(domain: "PitchShift", code: Int(status),
                              userInfo: [NSLocalizedDescriptionKey: "Failed to create process tap: \(status)"])
             }
             tapObjectID = tid
-            logger.log("[Retune] Created process tap ID=\(tid)")
+            logger.log("[PitchShift] Created process tap ID=\(tid)")
         } else {
-            throw NSError(domain: "Retune", code: -1,
+            throw NSError(domain: "PitchShift", code: -1,
                          userInfo: [NSLocalizedDescriptionKey: "macOS 14.2+ required for system audio tap"])
         }
     }
@@ -443,7 +637,7 @@ final class AudioEngine: ObservableObject {
             AudioObjectGetPropertyData(deviceID, &propAddr, 0, nil, &size, ptr)
         }
         guard status == noErr else {
-            throw NSError(domain: "Retune", code: Int(status),
+            throw NSError(domain: "PitchShift", code: Int(status),
                          userInfo: [NSLocalizedDescriptionKey: "Failed to get device UID for \(deviceID): \(status)"])
         }
         return uid as String
@@ -451,11 +645,11 @@ final class AudioEngine: ObservableObject {
 
     private func createAggregateDevice() throws {
         let outputUID = try getDeviceUID(outputDeviceID)
-        logger.log("[Retune] Output UID: \(outputUID)")
+        logger.log("[PitchShift] Output UID: \(outputUID)")
 
         let aggDesc: [String: Any] = [
-            kAudioAggregateDeviceNameKey as String: "Retune Tap",
-            kAudioAggregateDeviceUIDKey as String: "com.retune.tap.\(UUID().uuidString)",
+            kAudioAggregateDeviceNameKey as String: "PitchShift Tap",
+            kAudioAggregateDeviceUIDKey as String: "com.pitchshift.tap.\(UUID().uuidString)",
             kAudioAggregateDeviceMainSubDeviceKey as String: outputUID,
             kAudioAggregateDeviceIsPrivateKey as String: true,
             kAudioAggregateDeviceIsStackedKey as String: false,
@@ -474,16 +668,16 @@ final class AudioEngine: ObservableObject {
         var aggID: AudioObjectID = 0
         let status = AudioHardwareCreateAggregateDevice(aggDesc as CFDictionary, &aggID)
         guard status == noErr else {
-            throw NSError(domain: "Retune", code: Int(status),
+            throw NSError(domain: "PitchShift", code: Int(status),
                          userInfo: [NSLocalizedDescriptionKey: "Failed to create aggregate device: \(status)"])
         }
         aggregateDeviceID = aggID
-        logger.log("[Retune] Created aggregate device ID=\(aggID)")
+        logger.log("[PitchShift] Created aggregate device ID=\(aggID)")
 
         // Explicitly match output device sample rate for best quality
         if let outputRate = AudioDeviceManager.deviceSampleRate(for: outputDeviceID), outputRate > 0 {
             AudioDeviceManager.setDeviceSampleRate(aggregateDeviceID, sampleRate: outputRate)
-            logger.log("[Retune] Matched aggregate sample rate to output: \(Int(outputRate)) Hz")
+            logger.log("[PitchShift] Matched aggregate sample rate to output: \(Int(outputRate)) Hz")
         }
 
         // Set IO buffer size (user-configurable)
@@ -495,7 +689,7 @@ final class AudioEngine: ObservableObject {
         )
         let bst = AudioObjectSetPropertyData(aggID, &propAddr, 0, nil,
                                               UInt32(MemoryLayout<UInt32>.size), &bufSize)
-        logger.log("[Retune] Set IO buffer size=\(bufSize) status=\(bst)")
+        logger.log("[PitchShift] Set IO buffer size=\(bufSize) status=\(bst)")
     }
 
     private func destroyAggregateDevice() {
@@ -540,7 +734,7 @@ final class AudioEngine: ObservableObject {
         }, refCon, &procID)
 
         guard status == noErr, let pid = procID else {
-            throw NSError(domain: "Retune", code: 1,
+            throw NSError(domain: "PitchShift", code: 1,
                          userInfo: [NSLocalizedDescriptionKey: "Failed to create IOProc: \(status)"])
         }
         ioProcID = pid
@@ -549,10 +743,10 @@ final class AudioEngine: ObservableObject {
         guard st == noErr else {
             AudioDeviceDestroyIOProcID(aggregateDeviceID, pid)
             ioProcID = nil
-            throw NSError(domain: "Retune", code: 2,
+            throw NSError(domain: "PitchShift", code: 2,
                          userInfo: [NSLocalizedDescriptionKey: "Failed to start aggregate device: \(st)"])
         }
-        logger.log("[Retune] IOProc started on aggregate device \(aggregateDeviceID)")
+        logger.log("[PitchShift] IOProc started on aggregate device \(aggregateDeviceID)")
     }
 
     private func stopCapture() {
@@ -621,11 +815,11 @@ final class AudioEngine: ObservableObject {
             let st = AudioUnitSetProperty(outputAU, kAudioOutputUnitProperty_CurrentDevice,
                                           kAudioUnitScope_Global, 0,
                                           &devID, UInt32(MemoryLayout<AudioDeviceID>.size))
-            logger.log("[Retune] Output device=\(AudioDeviceManager.deviceName(for: devID) ?? "?") status=\(st)")
+            logger.log("[PitchShift] Output device=\(AudioDeviceManager.deviceName(for: devID) ?? "?") status=\(st)")
         }
 
         let outFmt = engine.outputNode.outputFormat(forBus: 0)
-        logger.log("[Retune] Format: source=\(Int(sampleRate))Hz output=\(Int(outFmt.sampleRate))Hz/\(outFmt.channelCount)ch")
+        logger.log("[PitchShift] Format: source=\(Int(sampleRate))Hz output=\(Int(outFmt.sampleRate))Hz/\(outFmt.channelCount)ch")
 
         engine.prepare()
         self.avEngine = engine
@@ -640,7 +834,7 @@ final class AudioEngine: ObservableObject {
         timer.schedule(deadline: .now() + 2, repeating: 2.0)
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
-            self.logger.log("[Retune] STATS io=\(self.ioProcCallCount)/\(self.ioProcNonZeroCount) src=\(self.srcCallCount)/\(self.srcNonZeroCount) rb=\(self.ringBuffer.available)")
+            self.logger.log("[PitchShift] STATS io=\(self.ioProcCallCount)/\(self.ioProcNonZeroCount) src=\(self.srcCallCount)/\(self.srcNonZeroCount) rb=\(self.ringBuffer.available)")
         }
         timer.resume()
         statsTimer = timer

@@ -2,16 +2,17 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var engine: AudioEngine
+    @State private var advancedExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Header
             HStack {
-                Text("Retune")
+                Text("PitchShift")
                     .font(.headline)
                 Spacer()
                 Toggle("", isOn: Binding(
-                    get: { engine.isRunning },
+                    get: { engine.isRunning || engine.isRestarting },
                     set: { newValue in
                         if newValue { engine.start() } else { engine.stop() }
                     }
@@ -76,65 +77,18 @@ struct MenuBarView: View {
                 }
             }
 
-            // Buffer size
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Buffer")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text("\(engine.bufferSize) frames · \(engine.bufferLatencyMs)")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-                Slider(
-                    value: Binding(
-                        get: {
-                            Double(AudioEngine.bufferSizes.firstIndex(of: engine.bufferSize) ?? 3)
-                        },
-                        set: { newVal in
-                            let idx = Int(newVal.rounded())
-                            let clamped = min(max(idx, 0), AudioEngine.bufferSizes.count - 1)
-                            engine.bufferSize = AudioEngine.bufferSizes[clamped]
-                        }
-                    ),
-                    in: 0...Double(AudioEngine.bufferSizes.count - 1),
-                    step: 1
-                )
-                HStack {
-                    Text("64")
-                        .font(.caption2).foregroundColor(.secondary)
-                    Spacer()
-                    Text("← latency    quality →")
-                        .font(.caption2).foregroundColor(.secondary).opacity(0.5)
-                    Spacer()
-                    Text("16384")
-                        .font(.caption2).foregroundColor(.secondary)
-                }
-            }
-
             Divider()
 
             // Status
-            if engine.isRunning {
+            if engine.isRunning || engine.isRestarting {
                 HStack {
                     Circle()
-                        .fill(.green)
+                        .fill(engine.isRestarting ? .orange : .green)
                         .frame(width: 6, height: 6)
-                    Text("Active")
+                    Text(engine.isRestarting ? "Restarting…" : "Active")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Spacer()
-                    if let sr = engine.currentSampleRate {
-                        Text("\(Int(sr)) Hz")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
                 }
-                Text("System audio tap → pitch shift → output")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .opacity(0.7)
             } else {
                 HStack {
                     Circle()
@@ -146,6 +100,133 @@ struct MenuBarView: View {
                 }
             }
 
+            // Tuning reference standards
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(stride(from: 0, to: AudioEngine.tuningReferences.count, by: 2)), id: \.self) { i in
+                    HStack(spacing: 0) {
+                        let ref = AudioEngine.tuningReferences[i]
+                        Text("\(ref.note)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text(" \(ref.name)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .opacity(0.6)
+                        if i + 1 < AudioEngine.tuningReferences.count {
+                            let ref2 = AudioEngine.tuningReferences[i + 1]
+                            Text("  ·  ")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .opacity(0.4)
+                            Text("\(ref2.note)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text(" \(ref2.name)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .opacity(0.6)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+
+            // Advanced section
+            DisclosureGroup(isExpanded: $advancedExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Buffer size
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Buffer")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Toggle("Auto", isOn: Binding(
+                                get: { engine.isAutoBuffer },
+                                set: { newValue in
+                                    if newValue {
+                                        engine.enableAutoBuffer()
+                                    } else {
+                                        engine.isAutoBuffer = false
+                                    }
+                                }
+                            ))
+                            .toggleStyle(.checkbox)
+                            .font(.caption)
+                        }
+                        HStack {
+                            Spacer()
+                            Text("\(engine.bufferSize) frames · \(engine.bufferLatencyLabel)")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: {
+                                    Double(AudioEngine.bufferSizes.firstIndex(of: engine.bufferSize) ?? 5)
+                                },
+                                set: { newVal in
+                                    let idx = Int(newVal.rounded())
+                                    let clamped = min(max(idx, 0), AudioEngine.bufferSizes.count - 1)
+                                    engine.setManualBuffer(AudioEngine.bufferSizes[clamped])
+                                }
+                            ),
+                            in: 0...Double(AudioEngine.bufferSizes.count - 1),
+                            step: 1
+                        )
+                        .disabled(engine.isAutoBuffer)
+                        HStack {
+                            Text("16")
+                                .font(.caption2).foregroundColor(.secondary)
+                            Spacer()
+                            Text("← latency    quality →")
+                                .font(.caption2).foregroundColor(.secondary).opacity(0.5)
+                            Spacer()
+                            Text("16384")
+                                .font(.caption2).foregroundColor(.secondary)
+                        }
+
+                        // Low latency warning
+                        if engine.bufferLatencyMs < 5.0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                Text("Very low latency — audio quality may be impacted")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    // Sample rate & tap info
+                    if engine.isRunning || engine.isRestarting {
+                        if let sr = engine.currentSampleRate {
+                            HStack {
+                                Text("Sample rate")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("\(Int(sr)) Hz")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Text("System audio tap → pitch shift → output")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .opacity(0.7)
+                    }
+                }
+                .padding(.top, 4)
+            } label: {
+                Text("Advanced")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Divider()
 
             Button("Quit") {
@@ -155,6 +236,6 @@ struct MenuBarView: View {
             .keyboardShortcut("q")
         }
         .padding()
-        .frame(width: 260)
+        .frame(width: 280)
     }
 }
