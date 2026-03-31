@@ -157,7 +157,7 @@ final class AudioEngine: ObservableObject {
     var referenceRange: ClosedRange<Float> {
         switch referenceNote {
         case .C: return 240...270
-        case .A: return 415...460
+        case .A: return 410...460
         }
     }
 
@@ -191,10 +191,10 @@ final class AudioEngine: ObservableObject {
     private var startRetryCount: Int = 0
     private let maxStartRetries: Int = 5
 
-    fileprivate nonisolated(unsafe) var ioProcCallCount: Int = 0
-    fileprivate nonisolated(unsafe) var ioProcNonZeroCount: Int = 0
-    fileprivate nonisolated(unsafe) var srcCallCount: Int = 0
-    fileprivate nonisolated(unsafe) var srcNonZeroCount: Int = 0
+    fileprivate let ioProcCallCount = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+    fileprivate let ioProcNonZeroCount = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+    fileprivate let srcCallCount = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+    fileprivate let srcNonZeroCount = UnsafeMutablePointer<Int>.allocate(capacity: 1)
 
     // Device change & wake handling
     private var deviceListenerBlock: AudioObjectPropertyListenerBlock?
@@ -211,6 +211,10 @@ final class AudioEngine: ObservableObject {
     // MARK: - Init
 
     init() {
+        ioProcCallCount.initialize(to: 0)
+        ioProcNonZeroCount.initialize(to: 0)
+        srcCallCount.initialize(to: 0)
+        srcNonZeroCount.initialize(to: 0)
         loadPersistedSettings()
         // Start with A=440 displayed (disabled state)
         referenceNote = .A
@@ -527,10 +531,10 @@ final class AudioEngine: ObservableObject {
         destroyAggregateDevice()
         destroyTap()
         ringBuffer.reset()
-        ioProcCallCount = 0
-        ioProcNonZeroCount = 0
-        srcCallCount = 0
-        srcNonZeroCount = 0
+        ioProcCallCount.pointee = 0
+        ioProcNonZeroCount.pointee = 0
+        srcCallCount.pointee = 0
+        srcNonZeroCount.pointee = 0
         currentSampleRate = nil
     }
 
@@ -709,7 +713,7 @@ final class AudioEngine: ObservableObject {
             let src = UnsafeMutablePointer(mutating: inputData)
             let bufList = UnsafeMutableAudioBufferListPointer(src)
 
-            engine.ioProcCallCount += 1
+            engine.ioProcCallCount.pointee &+= 1
 
             if bufList.count >= 2, let d0 = bufList[0].mData, let d1 = bufList[1].mData {
                 let frames = Int(bufList[0].mDataByteSize) / MemoryLayout<Float>.size
@@ -718,7 +722,7 @@ final class AudioEngine: ObservableObject {
                 engine.ringBuffer.write(ch0: p0, ch1: p1, frames: frames)
                 let check = min(4, frames)
                 for i in 0..<check {
-                    if abs(p0[i]) > 0 || abs(p1[i]) > 0 { engine.ioProcNonZeroCount += 1; break }
+                    if abs(p0[i]) > 0 || abs(p1[i]) > 0 { engine.ioProcNonZeroCount.pointee &+= 1; break }
                 }
             } else if bufList.count == 1, let data = bufList[0].mData {
                 let count = Int(bufList[0].mDataByteSize) / MemoryLayout<Float>.size
@@ -726,7 +730,7 @@ final class AudioEngine: ObservableObject {
                 engine.ringBuffer.writeInterleaved(ptr, frames: count / 2)
                 let check = min(4, count)
                 for i in 0..<check {
-                    if abs(ptr[i]) > 0 { engine.ioProcNonZeroCount += 1; break }
+                    if abs(ptr[i]) > 0 { engine.ioProcNonZeroCount.pointee &+= 1; break }
                 }
             }
 
@@ -791,7 +795,7 @@ final class AudioEngine: ObservableObject {
         let sn = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             let eng = Unmanaged<AudioEngine>.fromOpaque(refSelf).takeUnretainedValue()
             let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            eng.srcCallCount += 1
+            eng.srcCallCount.pointee &+= 1
 
             if abl.count >= 2,
                let leftData = abl[0].mData,
@@ -799,7 +803,7 @@ final class AudioEngine: ObservableObject {
                 let left = leftData.assumingMemoryBound(to: Float.self)
                 let right = rightData.assumingMemoryBound(to: Float.self)
                 let read = rb.read(left: left, right: right, frames: Int(frameCount))
-                if read > 0 { eng.srcNonZeroCount += 1 }
+                if read > 0 { eng.srcNonZeroCount.pointee &+= 1 }
             }
 
             return noErr
@@ -831,10 +835,10 @@ final class AudioEngine: ObservableObject {
 
     private func startStatsTimer() {
         let timer = DispatchSource.makeTimerSource(queue: .global())
-        timer.schedule(deadline: .now() + 2, repeating: 2.0)
+        timer.schedule(deadline: .now() + 10, repeating: 30.0)
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
-            self.logger.log("[PitchShift] STATS io=\(self.ioProcCallCount)/\(self.ioProcNonZeroCount) src=\(self.srcCallCount)/\(self.srcNonZeroCount) rb=\(self.ringBuffer.available)")
+            self.logger.log("[PitchShift] STATS io=\(self.ioProcCallCount.pointee)/\(self.ioProcNonZeroCount.pointee) src=\(self.srcCallCount.pointee)/\(self.srcNonZeroCount.pointee) rb=\(self.ringBuffer.available)")
         }
         timer.resume()
         statsTimer = timer

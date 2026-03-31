@@ -8,6 +8,8 @@ final class PitchShiftLogger {
     private let logURL: URL
     private var handle: FileHandle?
 
+    private static let maxLogSize: UInt64 = 2 * 1024 * 1024  // 2 MB
+
     private init() {
         formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -18,11 +20,22 @@ final class PitchShiftLogger {
         try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
         logURL = logsDir.appendingPathComponent("pitchshift.log")
 
+        rotateIfNeeded()
+
         if !FileManager.default.fileExists(atPath: logURL.path) {
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
         }
         handle = try? FileHandle(forWritingTo: logURL)
         handle?.seekToEndOfFile()
+    }
+
+    private func rotateIfNeeded() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+              let size = attrs[.size] as? UInt64,
+              size > Self.maxLogSize else { return }
+        let oldURL = logURL.deletingPathExtension().appendingPathExtension("old.log")
+        try? FileManager.default.removeItem(at: oldURL)
+        try? FileManager.default.moveItem(at: logURL, to: oldURL)
     }
 
     var logPath: String { logURL.path }

@@ -97,11 +97,13 @@ final class AudioDeviceManager {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var name: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &propAddr, 0, nil, &size, &name)
-        guard status == noErr, let cfName = name else { return nil }
-        return cfName.takeUnretainedValue() as String
+        var name: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.stride)
+        let status = withUnsafeMutablePointer(to: &name) { ptr in
+            AudioObjectGetPropertyData(deviceID, &propAddr, 0, nil, &size, ptr)
+        }
+        guard status == noErr else { return nil }
+        return name as String
     }
 
     static func deviceSampleRate(for deviceID: AudioDeviceID) -> Float64? {
