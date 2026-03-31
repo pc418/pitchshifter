@@ -88,3 +88,9 @@ The panel includes buffer size control under **Advanced**:
 ## License
 
 [Apache License 2.0](LICENSE)
+
+---
+
+<p align="center">
+  <a href="https://ko-fi.com/F1F11WRQDT"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="ko-fi"></a>
+</p>
