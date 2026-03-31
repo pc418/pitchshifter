@@ -1,5 +1,6 @@
 .build/
 .swiftpm/
+.vscode/
 pitchshift.app/
 *.xcodeproj/
 xcuserdata/
@@ -8,4 +9,8 @@ DerivedData/
 *.o
 *.d
 *.dSYM/
+*.zip
+sign.sh
+pitchshift*.app
+!pitchshift.app/
 driver/
