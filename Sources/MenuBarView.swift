@@ -88,6 +88,12 @@ struct MenuBarView: View {
                     Text(engine.isRestarting ? "Restarting…" : "Active")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    Spacer()
+                    if let sr = engine.currentSampleRate {
+                        Text("\(Int(sr)) Hz")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
                 }
             } else {
                 HStack {
@@ -97,37 +103,6 @@ struct MenuBarView: View {
                     Text("Stopped")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                }
-            }
-
-            // Tuning reference standards
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(stride(from: 0, to: AudioEngine.tuningReferences.count, by: 2)), id: \.self) { i in
-                    HStack(spacing: 0) {
-                        let ref = AudioEngine.tuningReferences[i]
-                        Text("\(ref.note)")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Text(" \(ref.name)")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .opacity(0.6)
-                        if i + 1 < AudioEngine.tuningReferences.count {
-                            let ref2 = AudioEngine.tuningReferences[i + 1]
-                            Text("  ·  ")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .opacity(0.4)
-                            Text("\(ref2.note)")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                            Text(" \(ref2.name)")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .opacity(0.6)
-                        }
-                        Spacer()
-                    }
                 }
             }
 
@@ -201,23 +176,20 @@ struct MenuBarView: View {
 
                     Divider()
 
-                    // Sample rate & tap info
-                    if engine.isRunning || engine.isRestarting {
-                        if let sr = engine.currentSampleRate {
-                            HStack {
-                                Text("Sample rate")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text("\(Int(sr)) Hz")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        Text("System audio tap → pitch shift → output")
-                            .font(.caption2)
+                    // Example pitch values
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Example shifts")
+                            .font(.caption)
                             .foregroundColor(.secondary)
-                            .opacity(0.7)
+                        Group {
+                            Text("A4 = 432 Hz → −31.8¢ (Verdi tuning)")
+                            Text("A4 = 415 Hz → −102.0¢ (Baroque pitch)")
+                            Text("A4 = 443 Hz → +11.8¢ (European bright)")
+                            Text("C4 = 256 Hz → A4 ≈ 430.5 (Scientific)")
+                        }
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .opacity(0.7)
                     }
                 }
                 .padding(.top, 4)
@@ -229,11 +201,18 @@ struct MenuBarView: View {
 
             Divider()
 
-            Button("Quit") {
-                engine.stop()
-                NSApplication.shared.terminate(nil)
+            HStack {
+                Text("v1.4.2")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .opacity(0.5)
+                Spacer()
+                Button("Quit") {
+                    engine.stop()
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut("q")
             }
-            .keyboardShortcut("q")
         }
         .padding()
         .frame(width: 280)

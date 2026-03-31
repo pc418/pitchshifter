@@ -20,6 +20,7 @@ run: build
 	open $(APP_BUNDLE)
 
 install: build
+	rm -rf /Applications/$(APP_BUNDLE)
 	cp -R $(APP_BUNDLE) /Applications/$(APP_BUNDLE)
 	@echo "✓ Installed to /Applications/$(APP_BUNDLE)"
 
