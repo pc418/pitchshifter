@@ -13,6 +13,19 @@ make install           # copy to /Applications
 make clean             # remove build artifacts
 ```
 
+## Sign, Notarize & Release
+
+```bash
+bash sign.sh                                                          # Developer ID codesign
+ditto -c -k --keepParent pitchshift.app pitchshift.zip                # zip for notarization
+xcrun notarytool submit pitchshift.zip --keychain-profile "pc418" --wait   # notarize
+xcrun stapler staple pitchshift.app                                   # staple ticket
+rm pitchshift.zip && ditto -c -k --keepParent pitchshift.app pitchshift.zip  # re-zip with staple
+gh release create vX.Y.Z pitchshift.zip --title "vX.Y.Z" --notes "..."     # GitHub release
+```
+
+Keychain profile `pc418` stores Apple notarization credentials (team VBC54DC2R5).
+
 Requires Xcode Command Line Tools.
 
 ## Architecture
