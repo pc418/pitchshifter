@@ -25,11 +25,7 @@ final class AudioEngine: ObservableObject {
     @Published var isRunning = false
     @Published var referenceNote: ReferenceNote = .A {
         didSet {
-            // Reset to default value when switching modes
-            switch referenceNote {
-            case .C: referenceFreq = 256
-            case .A: referenceFreq = 432
-            }
+            referenceFreq = switch referenceNote { case .C: 256; case .A: 432 }
             UserDefaults.standard.set(referenceNote.rawValue, forKey: Self.udNoteKey)
         }
     }
@@ -126,10 +122,7 @@ final class AudioEngine: ObservableObject {
     }
 
     private func persistBufferPerRate() {
-        var dict: [String: Int] = [:]
-        for (key, val) in bufferSizePerRate {
-            dict[String(key)] = Int(val)
-        }
+        let dict = Dictionary(uniqueKeysWithValues: bufferSizePerRate.map { (String($0.key), Int($0.value)) })
         UserDefaults.standard.set(dict, forKey: Self.udBufferPerRateKey)
     }
 
@@ -138,33 +131,25 @@ final class AudioEngine: ObservableObject {
     }
 
     private func updateFromReference() {
-        switch referenceNote {
-        case .C:
-            targetA = referenceFreq * powf(2.0, 9.0 / 12.0)
-        case .A:
-            targetA = referenceFreq
+        targetA = switch referenceNote {
+        case .C: referenceFreq * powf(2.0, 9.0 / 12.0)
+        case .A: referenceFreq
         }
         updatePitch()
     }
 
     var referenceLabel: String {
-        switch referenceNote {
-        case .C: return "C4"
-        case .A: return "A4"
-        }
+        switch referenceNote { case .C: "C4"; case .A: "A4" }
     }
 
     var referenceRange: ClosedRange<Float> {
-        switch referenceNote {
-        case .C: return 240...270
-        case .A: return 410...460
-        }
+        switch referenceNote { case .C: 240...270; case .A: 410...460 }
     }
 
     var referencePresets: [(String, Float)] {
         switch referenceNote {
-        case .C: return [("256", 256), ("261", 261)]
-        case .A: return [("415", 415), ("432", 432), ("440", 440), ("443", 443)]
+        case .C: [("256", 256), ("261", 261)]
+        case .A: [("415", 415), ("432", 432), ("440", 440), ("443", 443)]
         }
     }
 
@@ -202,8 +187,13 @@ final class AudioEngine: ObservableObject {
     private var sampleRateListenerBlock: AudioObjectPropertyListenerBlock?
     private var monitoredDeviceForRate: AudioDeviceID = 0
     private var wakeObserver: Any?
+    private var willSleepObserver: Any?
+    private var screenSleepObserver: Any?
+    private var screenWakeObserver: Any?
     private var powerObserver: Any?
     private var isHandlingDeviceChange = false
+    private var wasRunningBeforeSleep = false
+    private var isScreenAsleep = false
     private var lastKnownDefaultOutput: AudioDeviceID = 0
     private var restartWorkItem: DispatchWorkItem?
     @Published private(set) var isRestarting = false
@@ -409,6 +399,18 @@ final class AudioEngine: ObservableObject {
     // MARK: - Sleep/Wake
 
     private func registerForWakeNotification() {
+        // Stop engine cleanly before system sleeps to prevent CoreAudio corruption
+        willSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.handleWillSleep()
+            }
+        }
+
+        // Restart engine after system wakes
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -418,14 +420,65 @@ final class AudioEngine: ObservableObject {
                 self?.handleWake()
             }
         }
+
+        // Track screen sleep/wake for diagnostics
+        screenSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.handleScreenSleep()
+            }
+        }
+
+        // Track screen wake for diagnostics
+        screenWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.handleScreenWake()
+            }
+        }
+    }
+
+    private func handleWillSleep() {
+        logger.log("[PitchShift] System will sleep")
+        wasRunningBeforeSleep = isRunning || isRestarting
+        if wasRunningBeforeSleep {
+            logger.log("[PitchShift] Stopping engine before sleep")
+            restartWorkItem?.cancel()
+            restartWorkItem = nil
+            isRestarting = false
+            tearDown()
+            // Keep isRunning true so UI doesn't flicker
+        }
     }
 
     private func handleWake() {
         logger.log("[PitchShift] System wake detected")
-        guard isRunning else { return }
-        logger.log("[PitchShift] Restarting after wake")
-        refreshOutputDevice()
-        restart()
+        isScreenAsleep = false
+        if wasRunningBeforeSleep {
+            wasRunningBeforeSleep = false
+            logger.log("[PitchShift] Restarting engine after wake")
+            refreshOutputDevice()
+            startRetryCount = 0
+            attemptStart()
+        }
+    }
+
+    private func handleScreenSleep() {
+        guard !isScreenAsleep else { return }
+        isScreenAsleep = true
+        logger.log("[PitchShift] Screen asleep")
+    }
+
+    private func handleScreenWake() {
+        guard isScreenAsleep else { return }
+        isScreenAsleep = false
+        logger.log("[PitchShift] Screen awake")
     }
 
     // MARK: - Power State
@@ -499,6 +552,7 @@ final class AudioEngine: ObservableObject {
     }
 
     func stop() {
+        wasRunningBeforeSleep = false
         restartWorkItem?.cancel()
         restartWorkItem = nil
         isRestarting = false
@@ -835,7 +889,7 @@ final class AudioEngine: ObservableObject {
 
     private func startStatsTimer() {
         let timer = DispatchSource.makeTimerSource(queue: .global())
-        timer.schedule(deadline: .now() + 10, repeating: 30.0)
+        timer.schedule(deadline: .now() + 10, repeating: 60.0)
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
             self.logger.log("[PitchShift] STATS io=\(self.ioProcCallCount.pointee)/\(self.ioProcNonZeroCount.pointee) src=\(self.srcCallCount.pointee)/\(self.srcNonZeroCount.pointee) rb=\(self.ringBuffer.available)")

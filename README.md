@@ -71,7 +71,7 @@ Core Audio Tap → IOProc → RingBuffer → AVAudioSourceNode → AVAudioUnitTi
 
 1. **System audio capture** — `CATapDescription` taps all system audio except the app itself (no feedback)
 2. **Aggregate device** — pairs the tap with the physical output for a single IOProc capture path
-3. **Ring buffer** — lock-free, dual-channel, power-of-2, Accelerate-backed; bridges real-time IOProc to AVAudioEngine
+3. **Ring buffer** — dual-channel, power-of-2, Accelerate-backed; bridges real-time IOProc to AVAudioEngine
 4. **Pitch shift** — `AVAudioUnitTimePitch` at max quality (overlap 32, render quality 127), tempo-preserving
 5. **Output** — routed to the active physical device
 

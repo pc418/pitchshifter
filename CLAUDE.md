@@ -50,13 +50,20 @@ Dual-channel (separate L/R buffers), not interleaved. This avoids interleave/dei
 - Always follows system default output device
 - Listens for `kAudioHardwarePropertyDefaultOutputDevice` changes (headphone plug, Bluetooth connect)
 - Listens for `kAudioHardwarePropertyDevices` changes (devices added/removed)
-- Handles sleep/wake via `NSWorkspace.didWakeNotification` with 2s recovery delay
+- Listens for `kAudioDevicePropertyNominalSampleRate` changes on the output device
+- Clean teardown before sleep via `NSWorkspace.willSleepNotification`
+- Auto-restart after wake via `NSWorkspace.didWakeNotification` (2s delay) — only if engine was running pre-sleep
+- Tracks screen sleep/wake via `screensDidSleepNotification` / `screensDidWakeNotification` for diagnostics
+- User-initiated stop clears pre-sleep state so wake doesn't auto-restart
 
 ## Settings persistence
 
 Stored in UserDefaults:
 - `referenceNote` — "C" or "A"
 - `referenceFreq` — Float (e.g. 256, 432)
+- `bufferSize` — Int (IO buffer frame count, e.g. 512)
+- `autoBuffer` — Bool (auto buffer sizing enabled)
+- `bufferSizePerRate` — [String: Int] (per-sample-rate manual buffer sizes)
 
 ## Entitlements
 
@@ -75,6 +82,6 @@ No microphone entitlement needed. The tap reads system audio output, not input.
 
 **Change pitch algorithm quality**: In AudioEngine.swift `setupAVEngine()`, the `kAudioUnitProperty_RenderQuality` is set to 127 (max). Lower values trade quality for CPU.
 
-**Change IO buffer size**: In `createAggregateDevice()`, `kAudioDevicePropertyBufferFrameSize` is set to 256 frames. Smaller = lower latency but higher CPU.
+**Change IO buffer size**: In `createAggregateDevice()`, `kAudioDevicePropertyBufferFrameSize` is set from the `bufferSize` property (default auto ≥ 20 ms). Configurable in the Advanced UI panel. Smaller = lower latency but higher CPU.
 
 **Add a new reference preset**: In AudioEngine.swift, add to `referencePresets` array.
