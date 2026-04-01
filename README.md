@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/Gemini_Generated_Image_bg2bt1bg2bt1bg2b.png" width="128" alt="PitchShift icon">
+  <img src="assets/icon.png" width="128" alt="PitchShift icon">
 </p>
 
 <h1 align="center">PitchShift</h1>
@@ -85,12 +85,14 @@ The panel includes buffer size control under **Advanced**:
 - **Manual** — pick 16 to 16384 frames (lower = less latency, higher = more stability)
 - Per-sample-rate settings are remembered independently
 
+## Support
+
+If PitchShift is useful to you, consider buying me a coffee. It helps fund development and keeps the project going.
+
+<p align="center">
+  <a href="https://ko-fi.com/F1F11WRQDT"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi"></a>
+</p>
+
 ## License
 
 [Apache License 2.0](LICENSE)
-
----
-
-<p align="center">
-  <a href="https://ko-fi.com/F1F11WRQDT"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="ko-fi"></a>
-</p>

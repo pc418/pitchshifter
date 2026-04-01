@@ -59,7 +59,14 @@ final class RingBuffer {
         }
 
         writePos &+= frames
-        _count = min(_count + frames, capacity)
+        let newCount = _count + frames
+        if newCount > capacity {
+            // Overflow: discard oldest data so reader stays on contiguous audio
+            readPos &+= (newCount - capacity)
+            _count = capacity
+        } else {
+            _count = newCount
+        }
         os_unfair_lock_unlock(&lock)
     }
 
@@ -83,7 +90,13 @@ final class RingBuffer {
         }
 
         writePos &+= frames
-        _count = min(_count + frames, capacity)
+        let newCount2 = _count + frames
+        if newCount2 > capacity {
+            readPos &+= (newCount2 - capacity)
+            _count = capacity
+        } else {
+            _count = newCount2
+        }
         os_unfair_lock_unlock(&lock)
     }
 

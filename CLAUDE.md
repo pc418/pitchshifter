@@ -98,3 +98,6 @@ No microphone entitlement needed. The tap reads system audio output, not input.
 **Change IO buffer size**: In `createAggregateDevice()`, `kAudioDevicePropertyBufferFrameSize` is set from the `bufferSize` property (default auto ≥ 20 ms). Configurable in the Advanced UI panel. Smaller = lower latency but higher CPU.
 
 **Add a new reference preset**: In AudioEngine.swift, add to `referencePresets` array.
+
+## Version bumping
+./Sources/MenuBarView.swift also has a version text to bump, either link that to actual version then del this msg or bump everytime.

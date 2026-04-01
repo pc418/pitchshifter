@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build universal binary
+        run: make build
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg-stage
+          cp -R pitchshift.app dmg-stage/
+          ln -s /Applications dmg-stage/Applications
+          hdiutil create -volname "PitchShift" \
+            -srcfolder dmg-stage \
+            -ov -format UDZO \
+            pitchshift.dmg
+
+      - name: Create ZIP
+        run: ditto -c -k --keepParent pitchshift.app pitchshift.zip
+
+      - name: Create source archive
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="pitchshift-${VERSION}/" HEAD -o "pitchshift-${VERSION}-source.tar.gz"
+
+      - name: Generate blockmap (SHA256 checksums)
+        run: |
+          shasum -a 256 pitchshift.dmg pitchshift.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Create latest.yml
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DMG_SIZE=$(stat -f%z pitchshift.dmg)
+          ZIP_SIZE=$(stat -f%z pitchshift.zip)
+          DMG_SHA=$(shasum -a 256 pitchshift.dmg | awk '{print $1}')
+          ZIP_SHA=$(shasum -a 256 pitchshift.zip | awk '{print $1}')
+          cat > latest.yml <<EOF
+          version: ${VERSION}
+          files:
+            - url: pitchshift.dmg
+              sha256: ${DMG_SHA}
+              size: ${DMG_SIZE}
+            - url: pitchshift.zip
+              sha256: ${ZIP_SHA}
+              size: ${ZIP_SIZE}
+          releaseDate: $(date -u +%Y-%m-%dT%H:%M:%S%z)
+          EOF
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pitchshift.dmg
+            pitchshift.zip
+            pitchshift-*-source.tar.gz
+            checksums.txt
+            latest.yml
+          generate_release_notes: true

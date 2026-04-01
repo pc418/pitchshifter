@@ -10,7 +10,8 @@ DerivedData/
 *.d
 *.dSYM/
 *.zip
+*.dmg
 sign.sh
 pitchshift*.app
 !pitchshift.app/
-driver/
+driver/pitchshift-*-source.tar.gz
