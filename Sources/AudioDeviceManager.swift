@@ -79,14 +79,13 @@ final class AudioDeviceManager {
         let st = AudioObjectGetPropertyData(deviceID, &propAddr, 0, nil, &size, allocated)
         guard st == noErr else { return 0 }
 
-        let bufferList = allocated.assumingMemoryBound(to: AudioBufferList.self).pointee
+        // Iterate the heap allocation directly. Copying the AudioBufferList by
+        // value would only carry mBuffers[0], so devices reporting more than one
+        // buffer (multi-stream / aggregate devices) would read past its end.
+        let listPtr = allocated.assumingMemoryBound(to: AudioBufferList.self)
         var totalChannels: UInt32 = 0
-        withUnsafePointer(to: bufferList.mBuffers) { ptr in
-            for i in 0..<Int(bufferList.mNumberBuffers) {
-                let buf = UnsafeRawPointer(ptr).advanced(by: i * MemoryLayout<AudioBuffer>.stride)
-                    .assumingMemoryBound(to: AudioBuffer.self).pointee
-                totalChannels += buf.mNumberChannels
-            }
+        for buf in UnsafeMutableAudioBufferListPointer(listPtr) {
+            totalChannels += buf.mNumberChannels
         }
         return totalChannels
     }

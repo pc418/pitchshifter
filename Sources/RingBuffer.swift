@@ -43,6 +43,15 @@ final class RingBuffer {
     /// Write stereo frames from two separate channel pointers (non-interleaved).
     /// Uses memcpy for bulk copy. Zero heap allocation.
     func write(ch0: UnsafePointer<Float>, ch1: UnsafePointer<Float>, frames: Int) {
+        guard frames > 0 else { return }
+        // A block larger than the ring can only ever leave its newest `capacity`
+        // frames; writing more would run past the end of the allocation.
+        var ch0 = ch0, ch1 = ch1, frames = frames
+        if frames > capacity {
+            ch0 = ch0.advanced(by: frames - capacity)
+            ch1 = ch1.advanced(by: frames - capacity)
+            frames = capacity
+        }
         os_unfair_lock_lock(&lock)
         let pos = writePos & mask
         let first = min(frames, capacity - pos)
@@ -73,6 +82,12 @@ final class RingBuffer {
     /// Write interleaved stereo from a single buffer (L0 R0 L1 R1 ...).
     /// Deinterleaves into dual-channel storage using vDSP stride copy. Zero heap allocation.
     func writeInterleaved(_ src: UnsafePointer<Float>, frames: Int) {
+        guard frames > 0 else { return }
+        var src = src, frames = frames
+        if frames > capacity {
+            src = src.advanced(by: (frames - capacity) * 2)
+            frames = capacity
+        }
         os_unfair_lock_lock(&lock)
         let pos = writePos & mask
         let first = min(frames, capacity - pos)

@@ -23,20 +23,27 @@ final class AudioEngine: ObservableObject {
     static let bufferSizes: [UInt32] = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 
     @Published var isRunning = false
+    /// Set while the UI is reset to its idle display (A = 440) so those transient
+    /// values never overwrite the user's persisted note/frequency choice.
+    private var suppressPersist = false
+
     @Published var referenceNote: ReferenceNote = .A {
         didSet {
             referenceFreq = switch referenceNote { case .C: 256; case .A: 432 }
+            guard !suppressPersist else { return }
+            storedReferenceNote = referenceNote
             UserDefaults.standard.set(referenceNote.rawValue, forKey: Self.udNoteKey)
         }
     }
 
     // Store user's actual choice
+    private var storedReferenceNote: ReferenceNote = .A
     private var storedReferenceFreq: Float = 432
 
     @Published var referenceFreq: Float = 432 {
         didSet {
             // Only store if running (user's actual choice)
-            if isRunning || isRestarting {
+            if !suppressPersist && (isRunning || isRestarting) {
                 storedReferenceFreq = referenceFreq
                 UserDefaults.standard.set(referenceFreq, forKey: Self.udFreqKey)
             }
@@ -206,9 +213,12 @@ final class AudioEngine: ObservableObject {
         srcCallCount.initialize(to: 0)
         srcNonZeroCount.initialize(to: 0)
         loadPersistedSettings()
-        // Start with A=440 displayed (disabled state)
+        // Start with A=440 displayed (disabled state). Suppressed so the idle
+        // display doesn't clobber the persisted reference note/frequency.
+        suppressPersist = true
         referenceNote = .A
         referenceFreq = 440
+        suppressPersist = false
         refreshOutputDevice()
         lastKnownDefaultOutput = AudioDeviceManager.defaultOutputDeviceID()
         installDeviceListeners()
@@ -221,7 +231,8 @@ final class AudioEngine: ObservableObject {
         let ud = UserDefaults.standard
         if let noteRaw = ud.string(forKey: Self.udNoteKey),
            let note = ReferenceNote(rawValue: noteRaw) {
-            // Set backing storage directly to avoid didSet resetting freq
+            // didSet records this into storedReferenceNote; referenceFreq is
+            // restored from UserDefaults immediately below.
             referenceNote = note
         }
         let freq = ud.float(forKey: Self.udFreqKey)
@@ -236,14 +247,17 @@ final class AudioEngine: ObservableObject {
         // Load per-rate buffer sizes
         if let dict = ud.dictionary(forKey: Self.udBufferPerRateKey) as? [String: Int] {
             for (key, val) in dict {
-                if let rateKey = Int(key) {
-                    bufferSizePerRate[rateKey] = UInt32(val)
-                }
+                // Reject out-of-range / unsupported values instead of trapping
+                // on the UInt32 conversion (UserDefaults is user-writable).
+                guard let rateKey = Int(key), rateKey > 0,
+                      let size = UInt32(exactly: val),
+                      Self.bufferSizes.contains(size) else { continue }
+                bufferSizePerRate[rateKey] = size
             }
         }
         let buf = ud.integer(forKey: Self.udBufferKey)
-        if buf > 0, Self.bufferSizes.contains(UInt32(buf)) {
-            bufferSize = UInt32(buf)
+        if let bufSize = UInt32(exactly: buf), Self.bufferSizes.contains(bufSize) {
+            bufferSize = bufSize
         }
     }
 
@@ -351,7 +365,14 @@ final class AudioEngine: ObservableObject {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.isHandlingDeviceChange = false
+            guard let self = self else { return }
+            self.isHandlingDeviceChange = false
+            // Re-check: notifications that arrived during the debounce window
+            // were dropped, so the system default may have moved again.
+            let current = AudioDeviceManager.defaultOutputDeviceID()
+            if current != self.outputDeviceID && !self.isVirtualDevice(current) {
+                self.handleDefaultOutputChange()
+            }
         }
     }
 
@@ -507,8 +528,15 @@ final class AudioEngine: ObservableObject {
     func start() {
         if isRunning { return }
         startRetryCount = 0
-        // Restore user's stored frequency
-        referenceFreq = storedReferenceFreq
+        // Restore the user's stored reference note, then their frequency.
+        // The note must be restored first so referenceRange/targetA match.
+        suppressPersist = true
+        referenceNote = storedReferenceNote
+        suppressPersist = false
+        let range = referenceRange
+        referenceFreq = range.contains(storedReferenceFreq)
+            ? storedReferenceFreq
+            : (referenceNote == .C ? 256 : 432)
         attemptStart()
     }
 
@@ -559,9 +587,11 @@ final class AudioEngine: ObservableObject {
         logger.log("[PitchShift] Stopping...")
         tearDown()
         isRunning = false
-        // Reset to A=440 when stopped
+        // Reset to A=440 when stopped (display only — keeps the saved choice)
+        suppressPersist = true
         referenceNote = .A
         referenceFreq = 440
+        suppressPersist = false
         logger.log("[PitchShift] Stopped")
     }
 

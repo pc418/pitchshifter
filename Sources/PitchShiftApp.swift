@@ -47,10 +47,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     weak var engine: AudioEngine?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        if !instanceGuard.acquire() {
+        switch instanceGuard.acquire() {
+        case .acquired:
+            break
+        case .alreadyRunning:
             PitchShiftLogger.shared.log("[PitchShift] Another instance is already running. Exiting.")
             NSApp.terminate(nil)
-            return
+        case .failed(let reason):
+            // Refuse to launch rather than risk a second global process tap:
+            // two instances each exclude only their own PID, so they capture
+            // each other's output and the audio doubles back on itself.
+            PitchShiftLogger.shared.log("[PitchShift] ERROR: instance lock unavailable (\(reason)). Exiting.")
+            NSApp.terminate(nil)
         }
     }
 
@@ -67,22 +75,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+enum InstanceLockResult {
+    case acquired
+    case alreadyRunning
+    case failed(String)
+}
+
 final class SingleInstanceGuard {
-    private let lockPath = "/tmp/pitchshift.lock"
+    private let lockURL: URL
     private var lockFD: Int32 = -1
 
-    func acquire() -> Bool {
-        let fd = open(lockPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-        if fd < 0 { return true }
+    init() {
+        // Per-user Application Support, not /tmp: /tmp is world-writable, so a
+        // lock file owned by another user (or a stale root-owned one) would make
+        // open() fail for every launch.
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        let dir = base.appendingPathComponent("PitchShift", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        lockURL = dir.appendingPathComponent("pitchshift.lock")
+    }
+
+    func acquire() -> InstanceLockResult {
+        let fd = open(lockURL.path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        if fd < 0 {
+            let err = String(cString: strerror(errno))
+            return .failed("\(lockURL.path): \(err)")
+        }
         if flock(fd, LOCK_EX | LOCK_NB) != 0 {
             close(fd)
-            return false
+            return .alreadyRunning
         }
         lockFD = fd
         let pid = String(getpid()) + "\n"
         _ = ftruncate(fd, 0)
         _ = pid.withCString { write(fd, $0, strlen($0)) }
-        return true
+        return .acquired
     }
 
     func release() {
