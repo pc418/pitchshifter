@@ -15,18 +15,26 @@ make clean             # remove build artifacts
 
 ## Sign, Notarize & Release
 
+Manual, from a clean tree. Credentials, verification, and the CI caveat:
+`docs/260821-infra-RELEASE_NOTARIZATION.md`.
+
 ```bash
-bash sign.sh                                                          # Developer ID codesign
+bash sign.sh                                                          # Developer ID codesign (runs make build itself)
 ditto -c -k --keepParent pitchshift.app pitchshift.zip                # zip for notarization
-xcrun notarytool submit pitchshift.zip --keychain-profile "pc418" --wait   # notarize
-xcrun stapler staple pitchshift.app                                   # staple ticket
+xcrun notarytool submit pitchshift.zip --keychain-profile "pc418" --wait
+xcrun stapler staple pitchshift.app
 rm pitchshift.zip && ditto -c -k --keepParent pitchshift.app pitchshift.zip  # re-zip with staple
-gh release create vX.Y.Z pitchshift.zip --title "vX.Y.Z" --notes "..."     # GitHub release
+
+# DMG — staple the image too, not just the .app inside it
+mkdir -p dmg-stage && cp -R pitchshift.app dmg-stage/ && ln -s /Applications dmg-stage/Applications
+hdiutil create -volname "PitchShift" -srcfolder dmg-stage -ov -format UDZO pitchshift.dmg
+xcrun stapler staple pitchshift.dmg && rm -rf dmg-stage
+
+gh release create vX.Y.Z pitchshift.zip pitchshift.dmg --title "vX.Y.Z" --notes "..."
 ```
 
-Keychain profile `pc418` stores Apple notarization credentials (team VBC54DC2R5).
-
-Requires Xcode Command Line Tools.
+Requires Xcode Command Line Tools. `release.yml` does **not** notarize — releases
+stay manual until it does.
 
 ## Architecture
 
@@ -88,7 +96,7 @@ No microphone entitlement needed. The tap reads system audio output, not input.
 
 - All log lines prefixed with `[PitchShift]`
 - Log file: `~/Library/Logs/pitchshift.log`
-- Single instance enforced via flock on `/tmp/pitchshift.lock`
+- Single instance enforced via flock on `~/Library/Application Support/PitchShift/pitchshift.lock`
 - App uses `.accessory` activation policy (menu bar only, no dock icon)
 
 ## Common tasks

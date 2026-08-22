@@ -14,4 +14,9 @@ DerivedData/
 sign.sh
 pitchshift*.app
 !pitchshift.app/
-driver/pitchshift-*-source.tar.gz
+pitchshift-*-source.tar.gz
+
+# Local agent tooling / prompt logs (never publish — repo is public)
+user-msg-log.md
+.agent/
+.github/copilot-instructions.md
